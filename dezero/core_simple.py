@@ -1,11 +1,9 @@
 import contextlib
 import numpy as np
 import weakref
-from typing import List, Union
-import dezero
 
 
-def as_array(x) -> np.ndarray:
+def as_array(x):
     if np.isscalar(x):
         return np.array(x)
     return x
@@ -22,7 +20,7 @@ class Config:
 
 
 @contextlib.contextmanager
-def using_config(name: str, value):
+def using_config(name, value):
     old_value = getattr(Config, name)
     setattr(Config, name, value)
     try:
@@ -38,7 +36,7 @@ def no_grad():
 class Variable:
     __array_priority__ = 200
 
-    def __init__(self, data: np.ndarray, name: str = None):
+    def __init__(self, data, name=None):
         if data is not None:
             if not isinstance(data, np.ndarray):
                 raise TypeError(f'{type(data)} is not supported')
@@ -108,9 +106,9 @@ class Variable:
         self.creator = func
         self.generation = func.generation + 1
 
-    def backward(self, retain_grad: bool = False, create_graph: bool = False):
+    def backward(self, retain_grad=False):
         if self.grad is None:
-            self.grad = Variable(np.ones_like(self.data))
+            self.grad = np.ones_like(self.data)
 
         funcs = []
         seen = set()
@@ -126,20 +124,18 @@ class Variable:
         while funcs:
             f = funcs.pop()
             gys = [output().grad for output in f.outputs]
+            gxs = f.backward(*gys)
+            if not isinstance(gxs, list):
+                gxs = [gxs]
 
-            with using_config("enable_backprop", create_graph):
-                gxs = f.backward(*gys)
-                if not isinstance(gxs, list):
-                    gxs = [gxs]
+            for x, gx in zip(f.inputs, gxs):
+                if x.grad is None:
+                    x.grad = gx
+                else:
+                    x.grad = x.grad + gx
 
-                for x, gx in zip(f.inputs, gxs):
-                    if x.grad is None:
-                        x.grad = gx
-                    else:
-                        x.grad = x.grad + gx
-
-                    if x.creator is not None:
-                        add_func(x.creator)
+                if x.creator is not None:
+                    add_func(x.creator)
 
             if not retain_grad:
                 for y in f.outputs:
@@ -147,11 +143,6 @@ class Variable:
 
     def cleargrad(self):
         self.grad = None
-
-    def reshape(self, *shape):
-        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
-            shape = shape[0]
-        return dezero.functions.reshape(self, shape)
 
 
 class Function:
@@ -173,96 +164,94 @@ class Function:
 
         return outputs if len(outputs) > 1 else outputs[0]
 
-    def forward(self, xs: Union[np.ndarray, List[np.ndarray]]) -> np.ndarray:
+    def __lt__(self, other):
+        return self.generation < other.generation
+
+    def forward(self, xs):
         raise NotImplementedError()
 
-    def backward(self, gys: Union[Variable, List[Variable]]) -> Union[Variable, List[Variable]]:
+    def backward(self, gys):
         raise NotImplementedError()
 
 
 class Neg(Function):
-    def forward(self, x: np.ndarray) -> np.ndarray:
+    def forward(self, x):
         return -x
 
-    def backward(self, gy: Variable) -> Variable:
+    def backward(self, gy):
         return -gy
 
 
-def neg(x: Variable) -> Variable:
+def neg(x):
     return Neg()(x)
 
 
 class Add(Function):
-    def forward(self, x0: np.ndarray, x1: np.ndarray) -> np.ndarray:
-        self.x0_shape, self.x1_shape = x0.shape, x1.shape
+    def forward(self, x0, x1):
         y = x0 + x1
         return y
 
-    def backward(self, gy: Variable) -> List[Variable]:
-        gx0, gx1 = gy, gy
-        if self.x0_shape != self.x1_shape:
-            gx0 = dezero.functions.sum_to(gx0, self.x0_shape)
-            gx1 = dezero.functions.sum_to(gx1, self.x1_shape)
-        return [gx0, gx1]
+    def backward(self, gy):
+        return [gy, gy]
 
 
-def add(x0: Variable, x1: Variable) -> Variable:
+def add(x0, x1):
     x1 = as_array(x1)
     return Add()(x0, x1)
 
 
 class Sub(Function):
-    def forward(self, x0: np.ndarray, x1: np.ndarray) -> np.ndarray:
+    def forward(self, x0, x1):
         y = x0 - x1
         return y
 
-    def backward(self, gy: Variable) -> List[Variable]:
+    def backward(self, gy):
         return [gy, -gy]
 
 
-def sub(x0: Variable, x1: Variable) -> Variable:
+def sub(x0, x1):
     x1 = as_array(x1)
     return Sub()(x0, x1)
 
 
-def rsub(x0: Variable, x1: Variable) -> Variable:
+def rsub(x0, x1):
     x1 = as_array(x1)
     return Sub()(x1, x0)
 
 
 class Mul(Function):
-    def forward(self, x0: np.ndarray, x1: np.ndarray) -> np.ndarray:
+    def forward(self, x0, x1):
         y = x0 * x1
         return y
 
-    def backward(self, gy: Variable) -> List[Variable]:
-        x0, x1 = self.inputs
+    def backward(self, gy):
+        x0, x1 = self.inputs[0].data, self.inputs[1].data
         return [gy * x1, gy * x0]
 
 
-def mul(x0: Variable, x1: Variable) -> Variable:
+def mul(x0, x1):
     x1 = as_array(x1)
     return Mul()(x0, x1)
 
 
 class Div(Function):
-    def forward(self, x0: np.ndarray, x1: np.ndarray) -> np.ndarray:
+    def forward(self, x0, x1):
         y = x0 / x1
         return y
 
-    def backward(self, gy: Variable) -> List[Variable]:
-        x0, x1 = self.inputs
+    def backward(self, gy):
+        x0, x1 = self.inputs[0].data, self.inputs[1].data
         gx0 = gy / x1
         gx1 = gy * (-x0 / x1 ** 2)
         return [gx0, gx1]
 
 
-def div(x0: Variable, x1: Variable) -> Variable:
+def div(x0, x1):
     x1 = as_array(x1)
     return Div()(x0, x1)
 
 
-def rdiv(x0: Variable, x1: Variable) -> Variable:
+def rdiv(x0, x1):
     x1 = as_array(x1)
     return Div()(x1, x0)
 
@@ -271,16 +260,16 @@ class Pow(Function):
     def __init__(self, c):
         self.c = c
 
-    def forward(self, x: np.ndarray) -> np.ndarray:
+    def forward(self, x):
         y = x ** self.c
         return y
 
-    def backward(self, gy: Variable) -> Variable:
-        x, = self.inputs
+    def backward(self, gy):
+        x = self.inputs[0].data
         c = self.c
         gx = gy * c * (x ** (c - 1))
         return gx
 
 
-def pow(x: Variable, c=1) -> Variable:
+def pow(x, c):
     return Pow(c)(x)

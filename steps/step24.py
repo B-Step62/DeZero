@@ -10,6 +10,7 @@ from dezero import Variable
 def sphere(x, y):
     return x ** 2 + y ** 2
 
+
 def matyas(x, y):
     return 0.26 * (x ** 2 + y ** 2) - 0.48 * x * y
 
