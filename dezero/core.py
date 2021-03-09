@@ -1,7 +1,7 @@
 import contextlib
 import numpy as np
 import weakref
-from typing import List, Union
+from typing import List, Tuple, Union
 import dezero
 
 
@@ -58,6 +58,9 @@ class Variable:
         p = str(self.data).replace("\n", "\n" + " " * 9)
         return f"variable({p})"
 
+    def __getitem__(self, slices):
+        dezero.functions.get_item(self, slices)
+
     def __neg__(self):
         return neg(self)
 
@@ -104,6 +107,10 @@ class Variable:
     def dtype(self):
         return self.data.dtype
 
+    @property
+    def T(self):
+        return dezero.functions.transpose(self)
+
     def set_creator(self, func):
         self.creator = func
         self.generation = func.generation + 1
@@ -129,8 +136,8 @@ class Variable:
 
             with using_config("enable_backprop", create_graph):
                 gxs = f.backward(*gys)
-                if not isinstance(gxs, list):
-                    gxs = [gxs]
+                if not isinstance(gxs, tuple):
+                    gxs = (gxs,)
 
                 for x, gx in zip(f.inputs, gxs):
                     if x.grad is None:
@@ -152,6 +159,9 @@ class Variable:
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
             shape = shape[0]
         return dezero.functions.reshape(self, shape)
+
+    def transpose(self):
+        return dezero.functions.transpose(self)
 
 
 class Function:
@@ -176,7 +186,7 @@ class Function:
     def forward(self, xs: Union[np.ndarray, List[np.ndarray]]) -> np.ndarray:
         raise NotImplementedError()
 
-    def backward(self, gys: Union[Variable, List[Variable]]) -> Union[Variable, List[Variable]]:
+    def backward(self, gys: Union[Variable, List[Variable]]) -> Union[Variable, Tuple]:
         raise NotImplementedError()
 
 
@@ -198,12 +208,12 @@ class Add(Function):
         y = x0 + x1
         return y
 
-    def backward(self, gy: Variable) -> List[Variable]:
+    def backward(self, gy: Variable) -> Tuple[Variable, Variable]:
         gx0, gx1 = gy, gy
         if self.x0_shape != self.x1_shape:
             gx0 = dezero.functions.sum_to(gx0, self.x0_shape)
             gx1 = dezero.functions.sum_to(gx1, self.x1_shape)
-        return [gx0, gx1]
+        return gx0, gx1
 
 
 def add(x0: Variable, x1: Variable) -> Variable:
@@ -235,9 +245,9 @@ class Mul(Function):
         y = x0 * x1
         return y
 
-    def backward(self, gy: Variable) -> List[Variable]:
+    def backward(self, gy: Variable) -> Tuple[Variable, Variable]:
         x0, x1 = self.inputs
-        return [gy * x1, gy * x0]
+        return gy * x1, gy * x0
 
 
 def mul(x0: Variable, x1: Variable) -> Variable:
@@ -250,11 +260,11 @@ class Div(Function):
         y = x0 / x1
         return y
 
-    def backward(self, gy: Variable) -> List[Variable]:
+    def backward(self, gy: Variable) -> Tuple[Variable, Variable]:
         x0, x1 = self.inputs
         gx0 = gy / x1
         gx1 = gy * (-x0 / x1 ** 2)
-        return [gx0, gx1]
+        return gx0, gx1
 
 
 def div(x0: Variable, x1: Variable) -> Variable:
@@ -284,3 +294,8 @@ class Pow(Function):
 
 def pow(x: Variable, c=1) -> Variable:
     return Pow(c)(x)
+
+
+class Parameter(Variable):
+    pass
+
