@@ -4,7 +4,7 @@ import dezero
 from dezero.core import Function, Variable, as_variable, as_array
 from dezero.utils import reshape_sum_backward, np_sum_to
 from dezero import utils
-
+from dezero.functions_conv import *
 
 
 class Sin(Function):
@@ -72,17 +72,24 @@ def reshape(x: Variable, shape) -> Variable:
 
 
 class Transpose(Function):
+    def __init__(self, axes=None):
+        self.axes = axes
+
     def forward(self, x: np.ndarray) -> np.ndarray:
-        y = np.transpose(x)
+        y = x.transpose(self.axes)
         return y
 
     def backward(self, gy: Variable) -> Variable:
-        gx = transpose(gy)
-        return gx
+        if self.axes is None:
+            return transpose(gy)
+
+        axes_len = len(self.axes)
+        inv_axes = tuple(np.argsort([ax % axes_len for ax in self.axes]))
+        return transpose(gy, inv_axes)
 
 
-def transpose(x: Variable) -> Variable:
-    return Transpose()(x)
+def transpose(x: Variable, axes=None) -> Variable:
+    return Transpose(axes)(x)
 
 
 class Sum(Function):
@@ -191,7 +198,7 @@ class Linear(Function):
         x, W, b = self.inputs
         gx = matmul(gy, W.T)
         gW = matmul(x.T, gy)
-        gb = None if b is None else sum_to(gy, b.shape)
+        gb = None if b.data is None else sum_to(gy, b.shape)
         return gx, gW, gb
 
 
@@ -228,6 +235,18 @@ class ReLU(Function):
 
 def relu(x):
     return ReLU()(x)
+
+
+def dropout(x, dropout_ratio=0.5):
+    x = as_variable(x)
+
+    if dezero.Config.train:
+        mask = np.random.rand(*x.shape) > dropout_ratio
+        scale = np.array(1.0 * dropout_ratio).astype(x.dtype)
+        y = x * mask / scale
+        return y
+    else:
+        return x
 
 
 class GetItem(Function):

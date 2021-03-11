@@ -8,6 +8,7 @@ numpy = "*"
 memory-profiler = "*"
 graphviz = "*"
 matplotlib = "*"
+pillow = "*"
 
 [dev-packages]
 

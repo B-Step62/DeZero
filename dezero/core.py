@@ -19,6 +19,7 @@ def as_variable(obj):
 
 class Config:
     enable_backprop = True
+    train = True
 
 
 @contextlib.contextmanager
@@ -29,6 +30,10 @@ def using_config(name: str, value):
         yield
     finally:
         setattr(Config, name, old_value)
+
+
+def test_mode():
+    return using_config("train", False)
 
 
 def no_grad():
@@ -160,9 +165,26 @@ class Variable:
             shape = shape[0]
         return dezero.functions.reshape(self, shape)
 
-    def transpose(self):
-        return dezero.functions.transpose(self)
+    def transpose(self, *axes):
+        if len(axes) == 0:
+            axes = None
+        elif len(axes) == 1:
+            if isinstance(axes[0], (tuple, list)) or axes[0] is None:
+                axes = axes[0]
+        return dezero.functions.transpose(self, axes)
 
+    def unchain(self):
+        self.creator = None
+
+    def unchain_backward(self):
+        if self.creator is not None:
+            funcs = [self.creator]
+            while funcs:
+                f = funcs.pop()
+                for x in f.inputs:
+                    if x.creator is not None:
+                        funcs.append(x.creator)
+                        x.unchain()
 
 class Function:
     def __call__(self, *inputs):
